@@ -13,14 +13,16 @@ type Board = Cell[][];
 const BOARD_SIZE = 15;
 const WIN_CONDITION = 5;
 
-// Cập nhật trọng số để ưu tiên phòng thủ
+// Cập nhật trọng số để ưu tiên chặn chuỗi ba hơn
 const WEIGHTS = {
-  win: 1000000, // Tăng trọng số để đảm bảo ưu tiên thắng ngay
-  blockWin: 900000, // Chặn thắng của đối thủ
+  win: 1000000,
+  blockWin: 900000,
   fourInRow: 10000,
-  blockFour: 50000, // Chặn chuỗi bốn của đối thủ
+  blockFour: 50000,
   threeInRow: 1000,
-  blockThree: 5000, // Chặn chuỗi ba của đối thủ
+  blockThree: 10000, // Tăng trọng số để ưu tiên chặn chuỗi ba hơn tạo chuỗi ba
+  blockThreeOpen: 15000, // Ưu tiên chặn chuỗi ba mở (cả hai đầu trống)
+  blockThreeSemiOpen: 12000, // Chặn chuỗi ba bán mở (một đầu trống)
   twoInRow: 100,
   one: 10,
 };
@@ -91,7 +93,7 @@ export function Board({ mode }: BoardProps) {
     return false;
   };
 
-  // Hàm evaluatePosition cải tiến
+// Hàm evaluatePosition cải tiến
 const evaluatePosition = (row: number, col: number, player: Player, tempBoard: Board, isDefensive: boolean = false): number => {
   let score = 0;
   const opponent = player === 'O' ? 'X' : 'O';
@@ -164,7 +166,13 @@ const evaluatePosition = (row: number, col: number, player: Player, tempBoard: B
       }
     } else if (consecutive === 3) {
       if (isDefensive) {
-        score += blocked >= 2 ? 0 : WEIGHTS.blockThree * (openEnds + 1);
+        if (openEnds === 2) {
+          score += WEIGHTS.blockThreeOpen; // Chuỗi ba mở rất nguy hiểm
+        } else if (openEnds === 1) {
+          score += WEIGHTS.blockThreeSemiOpen; // Chuỗi ba bán mở
+        } else {
+          score += blocked >= 2 ? 0 : WEIGHTS.blockThree;
+        }
       } else {
         score += blocked >= 2 ? 0 : WEIGHTS.threeInRow * (openEnds + 1);
       }
@@ -180,14 +188,14 @@ const evaluatePosition = (row: number, col: number, player: Player, tempBoard: B
   return score;
 };
 
-  // Hàm findBestMove cải tiến
+ // Hàm findBestMove cải tiến
 const findBestMove = (currentBoard: Board): [number, number] => {
   let bestScore = -Infinity;
-  let bestMove: [number, number] = [Math.floor(BOARD_SIZE / 2), Math.floor(BOARD_SIZE / 2)]; // Default to center
+  let bestMove: [number, number] = [Math.floor(BOARD_SIZE / 2), Math.floor(BOARD_SIZE / 2)];
 
   // Lấy các ô lân cận để tối ưu hóa tìm kiếm
   const movesToCheck: [number, number][] = [];
-  const range = 2; // Kiểm tra trong bán kính 2 ô xung quanh các ô đã đánh
+  const range = 2;
   for (let i = 0; i < BOARD_SIZE; i++) {
     for (let j = 0; j < BOARD_SIZE; j++) {
       if (currentBoard[i][j]) {
@@ -208,7 +216,6 @@ const findBestMove = (currentBoard: Board): [number, number] => {
     }
   }
 
-  // Nếu không có nước đi nào gần, kiểm tra toàn bộ bảng
   if (movesToCheck.length === 0) {
     for (let i = 0; i < BOARD_SIZE; i++) {
       for (let j = 0; j < BOARD_SIZE; j++) {
@@ -219,7 +226,6 @@ const findBestMove = (currentBoard: Board): [number, number] => {
     }
   }
 
-  // Loại bỏ các nước đi trùng lặp
   const uniqueMoves = Array.from(new Set(movesToCheck.map(([r, c]) => `${r},${c}`)))
     .map(str => str.split(',').map(Number) as [number, number]);
 
@@ -241,17 +247,35 @@ const findBestMove = (currentBoard: Board): [number, number] => {
     }
   }
 
-  // Kiểm tra và ưu tiên chặn chuỗi ba hoặc bốn của đối thủ
+  // Kiểm tra và ưu tiên chặn chuỗi bốn của đối thủ
   for (const [i, j] of uniqueMoves) {
     const newBoard = currentBoard.map(row => [...row]);
     newBoard[i][j] = 'X';
     const defensiveScore = evaluatePosition(i, j, 'X', newBoard, true);
-    if (defensiveScore >= WEIGHTS.blockThree) {
+    if (defensiveScore >= WEIGHTS.blockFour) {
       return [i, j];
     }
   }
 
-  // Đánh giá các nước đi tấn công
+  // Kiểm tra và ưu tiên chặn chuỗi ba của đối thủ
+  let maxDefensiveScore = -Infinity;
+  let defensiveMove: [number, number] | null = null;
+  for (const [i, j] of uniqueMoves) {
+    const newBoard = currentBoard.map(row => [...row]);
+    newBoard[i][j] = 'X';
+    const defensiveScore = evaluatePosition(i, j, 'X', newBoard, true);
+    if (defensiveScore >= WEIGHTS.blockThree && defensiveScore > maxDefensiveScore) {
+      maxDefensiveScore = defensiveScore;
+      defensiveMove = [i, j];
+    }
+  }
+
+  // Nếu có chuỗi ba nguy hiểm của đối thủ, ưu tiên chặn
+  if (defensiveMove && maxDefensiveScore >= WEIGHTS.blockThree) {
+    return defensiveMove;
+  }
+
+  // Chỉ xem xét tấn công nếu không có mối đe dọa cấp bách
   for (const [i, j] of uniqueMoves) {
     const newBoard = currentBoard.map(row => [...row]);
     newBoard[i][j] = 'O';
