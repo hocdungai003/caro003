@@ -13,15 +13,17 @@ type Board = Cell[][];
 const BOARD_SIZE = 15;
 const WIN_CONDITION = 5;
 
-// Score weights for bot evaluation
+// Cập nhật trọng số để ưu tiên phòng thủ
 const WEIGHTS = {
-  win: 100000,
+  win: 1000000, // Tăng trọng số để đảm bảo ưu tiên thắng ngay
+  blockWin: 900000, // Chặn thắng của đối thủ
   fourInRow: 10000,
+  blockFour: 50000, // Chặn chuỗi bốn của đối thủ
   threeInRow: 1000,
+  blockThree: 5000, // Chặn chuỗi ba của đối thủ
   twoInRow: 100,
   one: 10,
 };
-
 export function Board({ mode }: BoardProps) {
   const [board, setBoard] = useState<Board>(() =>
     Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null))
@@ -89,130 +91,179 @@ export function Board({ mode }: BoardProps) {
     return false;
   };
 
-  const evaluatePosition = (row: number, col: number, player: Player, tempBoard: Board): number => {
-    let score = 0;
-    const directions = [
-      [1, 0],   // horizontal
-      [0, 1],   // vertical
-      [1, 1],   // diagonal
-      [1, -1],  // anti-diagonal
-    ];
+  // Hàm evaluatePosition cải tiến
+const evaluatePosition = (row: number, col: number, player: Player, tempBoard: Board, isDefensive: boolean = false): number => {
+  let score = 0;
+  const opponent = player === 'O' ? 'X' : 'O';
+  const directions = [
+    [1, 0],   // horizontal
+    [0, 1],   // vertical
+    [1, 1],   // diagonal
+    [1, -1],  // anti-diagonal
+  ];
 
-    for (const [dx, dy] of directions) {
-      let consecutive = 1;
-      let blocked = 0;
+  for (const [dx, dy] of directions) {
+    let consecutive = 1;
+    let blocked = 0;
+    let openEnds = 0;
 
-      // Check forward
-      for (let i = 1; i < 5; i++) {
-        const newRow = row + dx * i;
-        const newCol = col + dy * i;
-        if (
-          newRow >= 0 && newRow < BOARD_SIZE &&
-          newCol >= 0 && newCol < BOARD_SIZE
-        ) {
-          if (tempBoard[newRow][newCol] === player) {
-            consecutive++;
-          } else if (tempBoard[newRow][newCol] !== null) {
-            blocked++;
-            break;
-          } else {
-            break;
-          }
+    // Check forward
+    for (let i = 1; i < 5; i++) {
+      const newRow = row + dx * i;
+      const newCol = col + dy * i;
+      if (
+        newRow >= 0 && newRow < BOARD_SIZE &&
+        newCol >= 0 && newCol < BOARD_SIZE
+      ) {
+        if (tempBoard[newRow][newCol] === player) {
+          consecutive++;
+        } else if (tempBoard[newRow][newCol] === null) {
+          openEnds += i === 1 ? 1 : 0;
+          break;
         } else {
           blocked++;
           break;
         }
+      } else {
+        blocked++;
+        break;
       }
+    }
 
-      // Check backward
-      for (let i = 1; i < 5; i++) {
-        const newRow = row - dx * i;
-        const newCol = col - dy * i;
-        if (
-          newRow >= 0 && newRow < BOARD_SIZE &&
-          newCol >= 0 && newCol < BOARD_SIZE
-        ) {
-          if (tempBoard[newRow][newCol] === player) {
-            consecutive++;
-          } else if (tempBoard[newRow][newCol] !== null) {
-            blocked++;
-            break;
-          } else {
-            break;
-          }
+    // Check backward
+    for (let i = 1; i < 5; i++) {
+      const newRow = row - dx * i;
+      const newCol = col - dy * i;
+      if (
+        newRow >= 0 && newRow < BOARD_SIZE &&
+        newCol >= 0 && newCol < BOARD_SIZE
+      ) {
+        if (tempBoard[newRow][newCol] === player) {
+          consecutive++;
+        } else if (tempBoard[newRow][newCol] === null) {
+          openEnds += i === 1 ? 1 : 0;
+          break;
         } else {
           blocked++;
           break;
         }
-      }
-
-      // Add score based on consecutive pieces and blockage
-      if (consecutive >= 5) {
-        score += WEIGHTS.win;
-      } else if (consecutive === 4) {
-        score += blocked === 2 ? 0 : WEIGHTS.fourInRow;
-      } else if (consecutive === 3) {
-        score += blocked === 2 ? 0 : WEIGHTS.threeInRow;
-      } else if (consecutive === 2) {
-        score += blocked === 2 ? 0 : WEIGHTS.twoInRow;
+      } else {
+        blocked++;
+        break;
       }
     }
 
-    // Add position-based scoring (center positions are better)
-    const centerDistance = Math.abs(row - BOARD_SIZE / 2) + Math.abs(col - BOARD_SIZE / 2);
-    score += (BOARD_SIZE - centerDistance) * WEIGHTS.one;
+    // Đánh giá điểm dựa trên chuỗi và trạng thái chặn
+    if (consecutive >= 5) {
+      score += isDefensive ? WEIGHTS.blockWin : WEIGHTS.win;
+    } else if (consecutive === 4) {
+      if (isDefensive) {
+        score += blocked >= 2 ? 0 : WEIGHTS.blockFour * (openEnds + 1);
+      } else {
+        score += blocked >= 2 ? 0 : WEIGHTS.fourInRow * (openEnds + 1);
+      }
+    } else if (consecutive === 3) {
+      if (isDefensive) {
+        score += blocked >= 2 ? 0 : WEIGHTS.blockThree * (openEnds + 1);
+      } else {
+        score += blocked >= 2 ? 0 : WEIGHTS.threeInRow * (openEnds + 1);
+      }
+    } else if (consecutive === 2) {
+      score += blocked >= 2 ? 0 : WEIGHTS.twoInRow * (openEnds + 1);
+    }
+  }
 
-    return score;
-  };
+  // Điểm bổ sung cho vị trí trung tâm
+  const centerDistance = Math.abs(row - BOARD_SIZE / 2) + Math.abs(col - BOARD_SIZE / 2);
+  score += (BOARD_SIZE - centerDistance) * WEIGHTS.one;
 
-  const findBestMove = (currentBoard: Board): [number, number] => {
-    let bestScore = -Infinity;
-    let bestMove: [number, number] = [0, 0];
-    
-    // First, check if we can win in one move
-    for (let i = 0; i < BOARD_SIZE; i++) {
-      for (let j = 0; j < BOARD_SIZE; j++) {
-        if (!currentBoard[i][j]) {
-          const newBoard = currentBoard.map(row => [...row]);
-          newBoard[i][j] = 'O';
-          if (checkWin(i, j, 'O', newBoard)) {
-            return [i, j];
+  return score;
+};
+
+  // Hàm findBestMove cải tiến
+const findBestMove = (currentBoard: Board): [number, number] => {
+  let bestScore = -Infinity;
+  let bestMove: [number, number] = [Math.floor(BOARD_SIZE / 2), Math.floor(BOARD_SIZE / 2)]; // Default to center
+
+  // Lấy các ô lân cận để tối ưu hóa tìm kiếm
+  const movesToCheck: [number, number][] = [];
+  const range = 2; // Kiểm tra trong bán kính 2 ô xung quanh các ô đã đánh
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    for (let j = 0; j < BOARD_SIZE; j++) {
+      if (currentBoard[i][j]) {
+        for (let di = -range; di <= range; di++) {
+          for (let dj = -range; dj <= range; dj++) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (
+              ni >= 0 && ni < BOARD_SIZE &&
+              nj >= 0 && nj < BOARD_SIZE &&
+              !currentBoard[ni][nj]
+            ) {
+              movesToCheck.push([ni, nj]);
+            }
           }
         }
       }
     }
+  }
 
-    // Then, check if we need to block opponent's winning move
+  // Nếu không có nước đi nào gần, kiểm tra toàn bộ bảng
+  if (movesToCheck.length === 0) {
     for (let i = 0; i < BOARD_SIZE; i++) {
       for (let j = 0; j < BOARD_SIZE; j++) {
         if (!currentBoard[i][j]) {
-          const newBoard = currentBoard.map(row => [...row]);
-          newBoard[i][j] = 'X';
-          if (checkWin(i, j, 'X', newBoard)) {
-            return [i, j];
-          }
+          movesToCheck.push([i, j]);
         }
       }
     }
+  }
 
-    // If no immediate win or block needed, evaluate positions
-    for (let i = 0; i < BOARD_SIZE; i++) {
-      for (let j = 0; j < BOARD_SIZE; j++) {
-        if (!currentBoard[i][j]) {
-          const newBoard = currentBoard.map(row => [...row]);
-          newBoard[i][j] = 'O';
-          
-          const score = evaluatePosition(i, j, 'O', newBoard);
-          if (score > bestScore) {
-            bestScore = score;
-            bestMove = [i, j];
-          }
-        }
-      }
+  // Loại bỏ các nước đi trùng lặp
+  const uniqueMoves = Array.from(new Set(movesToCheck.map(([r, c]) => `${r},${c}`)))
+    .map(str => str.split(',').map(Number) as [number, number]);
+
+  // Kiểm tra nước thắng ngay lập tức
+  for (const [i, j] of uniqueMoves) {
+    const newBoard = currentBoard.map(row => [...row]);
+    newBoard[i][j] = 'O';
+    if (checkWin(i, j, 'O', newBoard)) {
+      return [i, j];
     }
+  }
 
-    return bestMove;
-  };
+  // Kiểm tra cần chặn nước thắng của đối thủ
+  for (const [i, j] of uniqueMoves) {
+    const newBoard = currentBoard.map(row => [...row]);
+    newBoard[i][j] = 'X';
+    if (checkWin(i, j, 'X', newBoard)) {
+      return [i, j];
+    }
+  }
+
+  // Kiểm tra và ưu tiên chặn chuỗi ba hoặc bốn của đối thủ
+  for (const [i, j] of uniqueMoves) {
+    const newBoard = currentBoard.map(row => [...row]);
+    newBoard[i][j] = 'X';
+    const defensiveScore = evaluatePosition(i, j, 'X', newBoard, true);
+    if (defensiveScore >= WEIGHTS.blockThree) {
+      return [i, j];
+    }
+  }
+
+  // Đánh giá các nước đi tấn công
+  for (const [i, j] of uniqueMoves) {
+    const newBoard = currentBoard.map(row => [...row]);
+    newBoard[i][j] = 'O';
+    const score = evaluatePosition(i, j, 'O', newBoard);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = [i, j];
+    }
+  }
+
+  return bestMove;
+};
 
   const makeMove = (row: number, col: number) => {
     if (board[row][col] || winner) return;

@@ -24,7 +24,7 @@ export function useSound() {
         audio.currentTime = 0;
         audio.loop = loop;
         audio.volume = volume;
-        audio.play().catch(error => console.error('Audio play failed:', error));
+        audio.play();
       }
     } catch (error) {
       console.error('Failed to play sound:', error);
